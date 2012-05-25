@@ -23,161 +23,7 @@ function jplayer_menu() {
     'file' => 'includes/jplayer.admin.inc',
   );
 
-  $items['admin/reports/jplayer'] = array(
-    'title' => 'jPlayer content protection statistics',
-    'page callback' => 'jplayer_protection_statistics',
-    'access arguments' => array('access site reports'),
-    'description' => 'View statistics related to content protection for jPlayer.',
-    'file' => 'jplayer.admin.inc',
-    'file path' => drupal_get_path('module', 'jplayer') . '/includes',
-  );
-
-  $items['jplayer/authorize'] = array(
-    'title' => 'jPlayer content authorization',
-    'page callback' => 'jplayer_authorize',
-    'access arguments' => array('access content'),
-    'description' => 'jPlayer callback to authorize a sound file to be accessed.',
-    'type' => MENU_CALLBACK,
-  );
-
   return $items;
-}
-
-/**
- * Menu callback to authorize access to a file.
- */
-function jplayer_authorize($filepath, $timestamp) {
-  $filepath = base64_decode($filepath);
-  $timestamp = (int)base64_decode($timestamp);
-
-  if (!isset($_SESSION['jplayer_protect'])) {
-    $_SESSION['jplayer_protect'] = array();
-  }
-
-  if ($timestamp < (time() + variable_get('jplayer_access_time', 30))) {
-    $_SESSION['jplayer_protect'][$filepath] = $timestamp;
-  }
-
-  drupal_json(time() + variable_get('jplayer_access_time', 30));
-}
-
-/**
- * Implementation of hook_cron().
- */
-function jplayer_cron() {
-  // Delete records older than a week.
-  db_query("DELETE FROM {jplayer_denied} WHERE timestamp < %d", time() - 604800);
-}
-
-/**
- * Implementation of hook_file_download().
- */
-function jplayer_file_download($filepath) {
-  if (!variable_get('jplayer_protected', FALSE)) {
-    return NULL;
-  }
-
-  // We need to determine if we are responsible for this file.
-  $filepath = file_create_path($filepath);
-  $result = db_query("SELECT * FROM {files} WHERE filepath = '%s'", $filepath);
-
-  // Ensure case-sensitivity of uploaded file names.
-  while ($file = db_fetch_object($result)) {
-    if (strcmp($file->filepath, $filepath) == 0) {
-      break;
-    }
-  }
-
-  // If the file is not found in the database, we're not responsible for it.
-  if (empty($file)) {
-    return NULL;
-  }
-
-  // Find out if any file field contains this file, and if so, which field
-  // and node it belongs to. Required for later access checking.
-  $cck_files = array();
-  foreach (content_fields() as $field) {
-    if ($field['type'] == 'filefield' || $field['type'] == 'image') {
-      $db_info = content_database_info($field);
-      $table = $db_info['table'];
-      $fid_column = $db_info['columns']['fid']['column'];
-
-      $columns = array('vid', 'nid');
-      foreach ($db_info['columns'] as $property_name => $column_info) {
-        $columns[] = $column_info['column'] .' AS '. $property_name;
-      }
-      $result = db_query("SELECT ". implode(', ', $columns) ."
-                          FROM {". $table ."}
-                          WHERE ". $fid_column ." = %d", $file->fid);
-
-      while ($content = db_fetch_array($result)) {
-        $content['field'] = $field;
-        $cck_files[$field['field_name']][$content['vid']] = $content;
-      }
-    }
-  }
-
-  // If any of the displays for this field are for jPlayer, then we need to
-  // protect the file.
-  foreach ($cck_files as $field_name => $field_files) {
-    foreach ($field_files as $revision_id => $content) {
-      $teaser_format = $content['field']['display_settings']['teaser']['format'];
-      $full_format = $content['field']['display_settings']['full']['format'];
-      // Neither the teaser or the full formatter for this field is a jPlayer
-      // display.
-      if (!($teaser_format == 'single' || $teaser_format == 'playlist' || $full_format == 'single' || $full_format == 'playlist')) {
-        return NULL;
-      }
-    }
-  }
-
-  $access_key = $GLOBALS['base_url'] . '/' . $filepath;
-
-  if (isset($_SESSION['jplayer_protect'][$access_key])) {
-    $started = (int)$_SESSION['jplayer_protect'][$access_key];
-  }
-  else {
-    // We need to figure out how the browser would have URL-encoded the file
-    // name. If mod_rewrite is modifying the URL, it will decode URL-encoded
-    // characters, so we need to check both.
-    $encoded = str_replace($file->filename, rawurlencode($file->filename), $filepath);
-    $encoded = str_replace('sites/default/files', 'system/files', $encoded);
-    // For some reason ampersands are encoded twice by the browser.
-    $encoded = str_replace("%26", "%2526", $encoded);
-    $encoded_access_key = $GLOBALS['base_url'] . '/' . $encoded;
-
-    if (isset($_SESSION['jplayer_protect'][$encoded_access_key])) {
-      $access_key = $encoded_access_key;
-      $started = (int)$_SESSION['jplayer_protect'][$access_key];
-    }
-  }
-
-  // Now we know that content protection is enabled, at least one display for
-  // the field uses jPlayer, and we know when the player last started to access
-  // the file.
-  if ($started) {
-    if (time() <= ($started + variable_get('jplayer_access_time', 30))) {
-      // Allow access, and immediately expire access to the file. Some browsers
-      // (such as Chrome) send multiple HTTP requests for an <audio> element,
-      // so if the RANGE header is set we continue to allow access. Also,
-      // AppleCoreMedia in OS X 10.7 makes multiple requests in an attempt to
-      // fetch metadata about the audio. So, we ignore those requests until the
-      // agent indicates that the connection can be closed.
-      if (!isset($_SERVER['HTTP_RANGE']) && !(strpos($_SERVER['HTTP_USER_AGENT'], 'AppleCoreMedia') !== FALSE && strpos($_SERVER['HTTP_CONNECTION'], "keep-alive") !== FALSE)) {
-        unset($_SESSION['jplayer_protect'][$access_key]);
-      }
-      return NULL;
-    }
-  }
-
-  // Otherwise, deny access as the last played time is too far in the past.
-  $denied = new stdClass();
-  $denied->uid = $GLOBALS['user']->uid;
-  $denied->fid = $file->fid;
-  $denied->hostname = ip_address();
-  $denied->timestamp = time();
-  drupal_write_record('jplayer_denied', $denied);
-  return -1;
 }
 
 /**
@@ -292,6 +138,20 @@ function jplayer_add($add = TRUE) {
     );
   }
 
+  // Allow other modules to add resources to the page when a jPlayer is
+  // embedded.
+  if ($additional_resources = module_invoke_all('jplayer_add_js')) {
+    $return['additional_resources'] = $additional_resources;
+    if ($add) {
+      foreach ($additional_resources as $resource) {
+        $js_info = $resource['#attached']['js'];
+        foreach ($js_info as $js_path => $js_parameters) {
+          drupal_add_js($js_path, $js_parameters['type'], $js_parameters['scope']);
+        }
+      }
+    }
+  }
+
   return $return;
 }
 
@@ -348,3 +208,4 @@ function jplayer_get_version($directory = NULL) {
 
   return $version;
 }
+

@@ -1,0 +1,6 @@
+name = jPlayer Content Protection
+description = Prevent direct access to media files.
+package = Media
+core = 6.x
+dependencies[] = jplayer
+
