@@ -8,7 +8,7 @@
  * Themes single file.
  */
 function theme_jplayer_formatter_single($element) {
-  if ($element['#item']['fid']) {
+  if (isset($element['#item']['fid'])) {
     jplayer_add();
     return theme('jplayer_single', $element);
   }
@@ -32,7 +32,7 @@ function template_preprocess_jplayer_single(&$vars) {
  * Themes multiple items as playlist.
  */
 function theme_jplayer_formatter_playlist($element) {
-  if ($element[0]['#item']['fid']) {
+  if (isset($element[0]['#item']['fid'])) {
     jplayer_add();
     // If there's more than one file, use the playlist player. Otherwise, fall
     // back to the regular player.
